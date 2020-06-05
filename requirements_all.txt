@@ -1309,6 +1309,9 @@ pychromecast==7.7.2
 # homeassistant.components.pocketcasts
 pycketcasts==1.0.0
 
+# homeassistant.components.climacell
+pyclimacell==0.7.0
+
 # homeassistant.components.cmus
 pycmus==0.1.1
 
