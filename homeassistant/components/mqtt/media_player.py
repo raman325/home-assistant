@@ -3,12 +3,13 @@ import logging
 
 import voluptuous as vol
 
-from homeassistant.components import climate, mqtt
+from homeassistant.components import mqtt
 from homeassistant.components.media_player import (
     PLATFORM_SCHEMA as MEDIA_PLAYER_PLATFORM_SCHEMA,
     MediaPlayerEntity,
 )
 from homeassistant.components.media_player.const import (
+    DOMAIN as MP_DOMAIN,
     SUPPORT_CLEAR_PLAYLIST,
     SUPPORT_NEXT_TRACK,
     SUPPORT_PAUSE,
@@ -338,7 +339,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             raise
 
     async_dispatcher_connect(
-        hass, MQTT_DISCOVERY_NEW.format(climate.DOMAIN, "mqtt"), async_discover
+        hass, MQTT_DISCOVERY_NEW.format(MP_DOMAIN, "mqtt"), async_discover
     )
 
 
@@ -346,10 +347,10 @@ async def _async_setup_entity(
     hass, config, async_add_entities, config_entry=None, discovery_data=None
 ):
     """Set up the MQTT media player devices."""
-    async_add_entities([MqttClimate(hass, config, config_entry, discovery_data)])
+    async_add_entities([MqttMediaPlayer(hass, config, config_entry, discovery_data)])
 
 
-class MqttClimate(
+class MqttMediaPlayer(
     MqttAttributes,
     MqttAvailability,
     MqttDiscoveryUpdate,
@@ -359,7 +360,7 @@ class MqttClimate(
     """Representation of an MQTT media player device."""
 
     def __init__(self, hass, config, config_entry, discovery_data):
-        """Initialize the climate device."""
+        """Initialize the media player device."""
         self._config = config
         self._unique_id = config.get(CONF_UNIQUE_ID)
         self._sub_state = None
@@ -793,7 +794,7 @@ class MqttClimate(
 
     @property
     def name(self):
-        """Return the name of the climate device."""
+        """Return the name of the media player device."""
         return self._config[CONF_NAME]
 
     @property
@@ -948,7 +949,8 @@ class MqttClimate(
         return self._shuffle
 
     def _publish(self, topic, payload="", attr=None, value=None):
-
+        """Publish payload to topic if topic was provided."""
+        assert self.hass
         if self._topic[topic] is not None and (
             self._config[CONF_SEND_IF_OFF] or self._state != STATE_OFF
         ):
