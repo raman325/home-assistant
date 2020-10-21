@@ -5,16 +5,19 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import callback
 
 from . import ShellyDeviceWrapper
-from .const import DOMAIN
+from .const import DATA_CONFIG_ENTRY, DOMAIN
 from .entity import ShellyBlockEntity
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set up switches for device."""
-    wrapper = hass.data[DOMAIN][config_entry.entry_id]
+    wrapper = hass.data[DOMAIN][DATA_CONFIG_ENTRY][config_entry.entry_id]
 
     # In roller mode the relay blocks exist but do not contain required info
-    if wrapper.model == "SHSW-25" and wrapper.device.settings["mode"] != "relay":
+    if (
+        wrapper.model in ["SHSW-21", "SHSW-25"]
+        and wrapper.device.settings["mode"] != "relay"
+    ):
         return
 
     relay_blocks = [block for block in wrapper.device.blocks if block.type == "relay"]
