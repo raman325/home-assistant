@@ -237,69 +237,68 @@ class ClimaCellWeatherEntity(ClimaCellEntity, WeatherEntity):
     def forecast(self):
         """Return the forecast."""
         # Check if forecasts are available
-        if self.coordinator.data[FORECASTS].get(self.forecast_type):
-            forecasts = []
+        if not self.coordinator.data[FORECASTS].get(self.forecast_type):
+            return None
+        forecasts = []
 
-            # Set default values (in cases where keys don't exist), None will be
-            # returned. Override properties per forecast type as needed
-            for forecast in self.coordinator.data[FORECASTS][self.forecast_type]:
-                timestamp = self._get_cc_value(forecast, CC_ATTR_TIMESTAMP)
-                use_datetime = True
-                condition = self._get_cc_value(forecast, CC_ATTR_CONDITION)
-                precipitation = self._get_cc_value(forecast, CC_ATTR_PRECIPITATION)
-                precipitation_probability = self._get_cc_value(
-                    forecast, CC_ATTR_PRECIPITATION_PROBABILITY
+        # Set default values (in cases where keys don't exist), None will be
+        # returned. Override properties per forecast type as needed
+        for forecast in self.coordinator.data[FORECASTS][self.forecast_type]:
+            timestamp = self._get_cc_value(forecast, CC_ATTR_TIMESTAMP)
+            use_datetime = True
+            condition = self._get_cc_value(forecast, CC_ATTR_CONDITION)
+            precipitation = self._get_cc_value(forecast, CC_ATTR_PRECIPITATION)
+            precipitation_probability = self._get_cc_value(
+                forecast, CC_ATTR_PRECIPITATION_PROBABILITY
+            )
+            temp = self._get_cc_value(forecast, CC_ATTR_TEMPERATURE)
+            temp_low = None
+            wind_direction = self._get_cc_value(forecast, CC_ATTR_WIND_DIRECTION)
+            wind_speed = self._get_cc_value(forecast, CC_ATTR_WIND_SPEED)
+
+            if self.forecast_type == DAILY:
+                use_datetime = False
+                precipitation = self._get_cc_value(
+                    forecast, CC_ATTR_PRECIPITATION_DAILY
                 )
-                temp = self._get_cc_value(forecast, CC_ATTR_TEMPERATURE)
-                temp_low = None
-                wind_direction = self._get_cc_value(forecast, CC_ATTR_WIND_DIRECTION)
-                wind_speed = self._get_cc_value(forecast, CC_ATTR_WIND_SPEED)
-
-                if self.forecast_type == DAILY:
-                    use_datetime = False
-                    precipitation = self._get_cc_value(
-                        forecast, CC_ATTR_PRECIPITATION_DAILY
-                    )
-                    temp = next(
-                        (
-                            self._get_cc_value(item, CC_ATTR_TEMPERATURE_HIGH)
-                            for item in forecast[CC_ATTR_TEMPERATURE]
-                            if "max" in item
-                        ),
-                        temp,
-                    )
-                    temp_low = next(
-                        (
-                            self._get_cc_value(item, CC_ATTR_TEMPERATURE_LOW)
-                            for item in forecast[CC_ATTR_TEMPERATURE]
-                            if "min" in item
-                        ),
-                        temp_low,
-                    )
-                elif self.forecast_type == NOWCAST:
-                    # Precipitation is forecasted in CONF_TIMESTEP increments but in a
-                    # per hour rate, so value needs to be converted to an amount.
-                    precipitation = (
-                        precipitation / 60 * self._config_entry.options[CONF_TIMESTEP]
-                        if precipitation
-                        else None
-                    )
-
-                forecasts.append(
-                    _forecast_dict(
-                        self.hass,
-                        timestamp,
-                        use_datetime,
-                        condition,
-                        precipitation,
-                        precipitation_probability,
-                        temp,
-                        temp_low,
-                        wind_direction,
-                        wind_speed,
-                    )
+                temp = next(
+                    (
+                        self._get_cc_value(item, CC_ATTR_TEMPERATURE_HIGH)
+                        for item in forecast[CC_ATTR_TEMPERATURE]
+                        if "max" in item
+                    ),
+                    temp,
+                )
+                temp_low = next(
+                    (
+                        self._get_cc_value(item, CC_ATTR_TEMPERATURE_LOW)
+                        for item in forecast[CC_ATTR_TEMPERATURE]
+                        if "min" in item
+                    ),
+                    temp_low,
+                )
+            elif self.forecast_type == NOWCAST:
+                # Precipitation is forecasted in CONF_TIMESTEP increments but in a
+                # per hour rate, so value needs to be converted to an amount.
+                precipitation = (
+                    precipitation / 60 * self._config_entry.options[CONF_TIMESTEP]
+                    if precipitation
+                    else None
                 )
 
-            return forecasts
+            forecasts.append(
+                _forecast_dict(
+                    self.hass,
+                    timestamp,
+                    use_datetime,
+                    condition,
+                    precipitation,
+                    precipitation_probability,
+                    temp,
+                    temp_low,
+                    wind_direction,
+                    wind_speed,
+                )
+            )
 
-        return None
+        return forecasts
