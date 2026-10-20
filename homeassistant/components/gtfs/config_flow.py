@@ -4,7 +4,10 @@ import asyncio
 from functools import partial
 import json
 import logging
+import os
+from pathlib import Path
 import threading
+from types import MappingProxyType
 from typing import Any, override
 from uuid import uuid4
 
@@ -16,10 +19,11 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
+    ConfigSubentry,
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
-from homeassistant.const import CONF_URL
+from homeassistant.const import CONF_NAME, CONF_URL
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -32,9 +36,11 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_DATA,
     CONF_DATABASE,
     CONF_DESTINATION,
     CONF_ORIGIN,
+    DEFAULT_PATH,
     DOMAIN,
     SUBENTRY_TYPE_ROUTE,
 )
@@ -45,6 +51,7 @@ from .feed import (
     async_fetch_feed,
     feed_database_path,
     list_stops,
+    load_local_feed,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -150,6 +157,67 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=self._title or URL(self._url).host or self._url,
             data={CONF_URL: self._url, CONF_DATABASE: self._database},
+        )
+
+    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
+        """Import a route from a YAML GTFS sensor."""
+        data: str = import_data[CONF_DATA]
+        origin: str = import_data[CONF_ORIGIN]
+        destination: str = import_data[CONF_DESTINATION]
+        if origin == destination:
+            return self.async_abort(reason="same_stop")
+        # The legacy sensor's database, so upgrades don't import the feed again.
+        database = f"{os.path.splitext(data)[0]}.sqlite"
+        route_id = json.dumps([origin, destination])
+        entry = next(
+            (
+                entry
+                for entry in self._async_current_entries(include_ignore=False)
+                if entry.data[CONF_DATABASE] == database
+            ),
+            None,
+        )
+        if entry is not None and any(
+            subentry.unique_id == route_id for subentry in entry.subentries.values()
+        ):
+            return self.async_abort(reason="already_configured")
+        try:
+            agency, stops = await self.hass.async_add_executor_job(
+                load_local_feed,
+                Path(self.hass.config.path(DEFAULT_PATH, data)),
+                feed_database_path(self.hass, database),
+            )
+        except FileNotFoundError:
+            return self.async_abort(reason="file_not_found")
+        except InvalidFeed as err:
+            _LOGGER.warning("Could not import GTFS feed %s: %s", data, err)
+            return self.async_abort(reason="invalid_feed")
+        if origin not in stops or destination not in stops:
+            return self.async_abort(reason="invalid_stop")
+        route_data = {CONF_ORIGIN: origin, CONF_DESTINATION: destination}
+        title = import_data.get(CONF_NAME) or f"{stops[origin]} to {stops[destination]}"
+        if entry is not None:
+            self.hass.config_entries.async_add_subentry(
+                entry,
+                ConfigSubentry(
+                    data=MappingProxyType(route_data),
+                    subentry_type=SUBENTRY_TYPE_ROUTE,
+                    title=title,
+                    unique_id=route_id,
+                ),
+            )
+            return self.async_abort(reason="route_imported")
+        return self.async_create_entry(
+            title=agency or Path(data).name,
+            data={CONF_DATABASE: database},
+            subentries=[
+                {
+                    "data": route_data,
+                    "subentry_type": SUBENTRY_TYPE_ROUTE,
+                    "title": title,
+                    "unique_id": route_id,
+                }
+            ],
         )
 
     @classmethod

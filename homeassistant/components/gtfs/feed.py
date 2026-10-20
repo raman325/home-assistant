@@ -236,7 +236,7 @@ def _has_feed(db_path: Path) -> bool:
 
 
 def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, str]]:
-    """Import a local feed unless db_path already holds one; return its agency and stops.
+    """Import a local feed if needed; return its agency and stops.
 
     Raises FileNotFoundError if db_path holds no feed and source does not exist.
     """

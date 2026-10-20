@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.gtfs.const import (
+    CONF_DATA,
     CONF_DATABASE,
     CONF_DESTINATION,
     CONF_ORIGIN,
@@ -30,8 +31,13 @@ from homeassistant.components.gtfs.feed import (
     import_feed,
     load_local_feed,
 )
-from homeassistant.config_entries import SOURCE_USER, ConfigFlowResult
-from homeassistant.const import CONF_URL
+from homeassistant.config_entries import (
+    SOURCE_IMPORT,
+    SOURCE_USER,
+    ConfigEntry,
+    ConfigFlowResult,
+)
+from homeassistant.const import CONF_NAME, CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -582,3 +588,158 @@ async def test_add_route_entry_not_loaded(
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "entry_not_loaded"
+
+
+IMPORT_ROUTE = {CONF_DATA: "feed.zip", CONF_ORIGIN: "S1", CONF_DESTINATION: "S3"}
+
+
+async def _import_route(hass: HomeAssistant, **overrides: str) -> ConfigFlowResult:
+    return await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_IMPORT}, data={**IMPORT_ROUTE, **overrides}
+    )
+
+
+def _routes(entry: ConfigEntry) -> list[tuple[str, dict[str, Any], str | None]]:
+    return [
+        (subentry.title, dict(subentry.data), subentry.unique_id)
+        for subentry in entry.subentries.values()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "route_title"),
+    [
+        pytest.param({}, "First Street to Third Street", id="stop_names"),
+        pytest.param({CONF_NAME: "Commute"}, "Commute", id="yaml_name"),
+    ],
+)
+@pytest.mark.usefixtures("feed_file", "mock_setup_entry")
+async def test_import(
+    hass: HomeAssistant, name: dict[str, str], route_title: str
+) -> None:
+    """Test a YAML sensor creates a feed entry holding its route."""
+    result = await _import_route(hass, **name)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Test Agency"
+    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
+    assert _routes(result["result"]) == [
+        (
+            route_title,
+            {CONF_ORIGIN: "S1", CONF_DESTINATION: "S3"},
+            json.dumps(["S1", "S3"]),
+        )
+    ]
+    assert [
+        subentry.subentry_type for subentry in result["result"].subentries.values()
+    ] == [SUBENTRY_TYPE_ROUTE]
+    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]
+
+
+@pytest.mark.usefixtures("feed_folder", "mock_setup_entry")
+async def test_import_folder(hass: HomeAssistant) -> None:
+    """Test a YAML sensor reading an unzipped feed folder."""
+    result = await _import_route(hass, **{CONF_DATA: "feed"})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
+    assert gtfs_files(hass) == ["feed", "feed.sqlite"]
+
+
+@pytest.mark.parametrize(
+    "feed_zip",
+    [
+        pytest.param(
+            build_feed_zip(
+                replace={
+                    "agency.txt": f"{AGENCY_HEADER}TA,,https://example.com,America/New_York\n"
+                }
+            ),
+            id="unnamed_agency",
+        )
+    ],
+)
+@pytest.mark.usefixtures("feed_file", "mock_setup_entry")
+async def test_import_title_without_agency_name(hass: HomeAssistant) -> None:
+    """Test the entry is named after the data file when the agency has no name."""
+    result = await _import_route(hass)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "feed.zip"
+
+
+@pytest.mark.usefixtures("feed_file", "mock_setup_entry")
+async def test_import_route_joins_entry(hass: HomeAssistant) -> None:
+    """Test a second YAML sensor on the same file adds a route to the entry."""
+    entry = (await _import_route(hass))["result"]
+
+    result = await _import_route(hass, **{CONF_ORIGIN: "S2", CONF_NAME: "Second"})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "route_imported"
+    assert hass.config_entries.async_entries(DOMAIN) == [entry]
+    assert _routes(entry) == [
+        (
+            "First Street to Third Street",
+            {CONF_ORIGIN: "S1", CONF_DESTINATION: "S3"},
+            json.dumps(["S1", "S3"]),
+        ),
+        (
+            "Second",
+            {CONF_ORIGIN: "S2", CONF_DESTINATION: "S3"},
+            json.dumps(["S2", "S3"]),
+        ),
+    ]
+
+
+@pytest.mark.usefixtures("feed_file", "mock_setup_entry")
+async def test_import_already_configured(hass: HomeAssistant) -> None:
+    """Test importing a route that is already a subentry aborts."""
+    entry = (await _import_route(hass))["result"]
+
+    result = await _import_route(hass, **{CONF_NAME: "Renamed"})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert [title for title, _, _ in _routes(entry)] == ["First Street to Third Street"]
+
+
+@pytest.mark.parametrize(
+    ("feed_zip", "overrides", "reason"),
+    [
+        pytest.param(
+            build_feed_zip(),
+            {CONF_DATA: "missing.zip"},
+            "file_not_found",
+            id="file_not_found",
+        ),
+        pytest.param(
+            build_feed_zip(exclude=frozenset({"stops.txt"})),
+            {},
+            "invalid_feed",
+            id="invalid_feed",
+        ),
+        pytest.param(
+            build_feed_zip(), {CONF_ORIGIN: "S9"}, "invalid_stop", id="invalid_origin"
+        ),
+        pytest.param(
+            build_feed_zip(),
+            {CONF_DESTINATION: "S9"},
+            "invalid_stop",
+            id="invalid_destination",
+        ),
+        pytest.param(
+            build_feed_zip(), {CONF_ORIGIN: "S3"}, "same_stop", id="same_stop"
+        ),
+    ],
+)
+@pytest.mark.usefixtures("feed_file")
+async def test_import_failure(
+    hass: HomeAssistant, overrides: dict[str, str], reason: str
+) -> None:
+    """Test unusable YAML sensors abort without creating an entry."""
+    result = await _import_route(hass, **overrides)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == reason
+    assert hass.config_entries.async_entries(DOMAIN) == []
