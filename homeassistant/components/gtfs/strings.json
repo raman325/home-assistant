@@ -3,10 +3,11 @@
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_service%]",
       "file_not_found": "The GTFS data file or folder was not found.",
-      "invalid_feed": "The GTFS data file is not a valid GTFS feed.",
+      "invalid_feed": "The GTFS data is not a valid GTFS feed.",
       "invalid_stop": "The origin or destination stop was not found in the feed.",
       "route_imported": "The route was added to the existing feed.",
-      "same_stop": "[%key:component::gtfs::config_subentries::route::error::same_stop%]"
+      "same_stop": "[%key:component::gtfs::config_subentries::route::error::same_stop%]",
+      "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",

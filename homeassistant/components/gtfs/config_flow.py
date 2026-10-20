@@ -177,10 +177,6 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             None,
         )
-        if entry is not None and any(
-            subentry.unique_id == route_id for subentry in entry.subentries.values()
-        ):
-            return self.async_abort(reason="already_configured")
         try:
             agency, stops = await self.hass.async_add_executor_job(
                 load_local_feed,
@@ -192,6 +188,16 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         except InvalidFeed as err:
             _LOGGER.warning("Could not import GTFS feed %s: %s", data, err)
             return self.async_abort(reason="invalid_feed")
+        except Exception:
+            _LOGGER.exception("Unexpected exception importing GTFS feed %s", data)
+            return self.async_abort(reason="unknown")
+        if entry is not None and entry.state is ConfigEntryState.SETUP_ERROR:
+            # The entry failed setup because its database was missing.
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        if entry is not None and any(
+            subentry.unique_id == route_id for subentry in entry.subentries.values()
+        ):
+            return self.async_abort(reason="already_configured")
         if origin not in stops or destination not in stops:
             return self.async_abort(reason="invalid_stop")
         route_data = {CONF_ORIGIN: origin, CONF_DESTINATION: destination}

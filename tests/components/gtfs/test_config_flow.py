@@ -35,7 +35,9 @@ from homeassistant.config_entries import (
     SOURCE_IMPORT,
     SOURCE_USER,
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlowResult,
+    ConfigSubentryDataWithId,
 )
 from homeassistant.const import CONF_NAME, CONF_URL
 from homeassistant.core import HomeAssistant
@@ -743,3 +745,65 @@ async def test_import_failure(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == reason
     assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.usefixtures("feed_file")
+async def test_import_unexpected_error(hass: HomeAssistant) -> None:
+    """Test an unexpected error aborts the import instead of escaping the flow."""
+    with patch(
+        "homeassistant.components.gtfs.config_flow.load_local_feed",
+        side_effect=OSError,
+    ):
+        result = await _import_route(hass)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "unknown"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+async def test_import_reuses_existing_database(
+    hass: HomeAssistant, feed_file: Path
+) -> None:
+    """Test a database left by the legacy sensor is used when its feed is gone."""
+    await hass.async_add_executor_job(
+        import_feed, feed_file, feed_file.with_suffix(".sqlite"), threading.Event()
+    )
+    await hass.async_add_executor_job(feed_file.unlink)
+
+    result = await _import_route(hass)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
+    assert gtfs_files(hass) == ["feed.sqlite"]
+
+
+@pytest.mark.usefixtures("feed_file")
+async def test_import_rebuilds_missing_database(hass: HomeAssistant) -> None:
+    """Test importing into an entry whose database was deleted reloads the entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Test Agency",
+        data={CONF_DATABASE: "feed.sqlite"},
+        subentries_data=[
+            ConfigSubentryDataWithId(
+                data={CONF_ORIGIN: "S1", CONF_DESTINATION: "S3"},
+                subentry_id="route",
+                subentry_type=SUBENTRY_TYPE_ROUTE,
+                title="First Street to Third Street",
+                unique_id=json.dumps(["S1", "S3"]),
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+
+    result = await _import_route(hass)
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.state is ConfigEntryState.LOADED
+    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]
