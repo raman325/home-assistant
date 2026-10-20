@@ -1,5 +1,7 @@
 """Tests for GTFS config entry setup and removal."""
 
+from pathlib import Path
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -8,8 +10,12 @@ import pytest
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from homeassistant.components.gtfs.const import DOMAIN
-from homeassistant.components.gtfs.feed import close_feed, feed_database_path
+from homeassistant.components.gtfs.const import CONF_DATABASE, DOMAIN
+from homeassistant.components.gtfs.feed import (
+    close_feed,
+    feed_database_path,
+    import_feed,
+)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -150,3 +156,30 @@ async def test_download_written_in_chunks(
 
     assert mock_config_entry.state is ConfigEntryState.LOADED
     assert gtfs_files(hass) == [TEST_DATABASE]
+
+
+async def test_imported_entry_database_missing(hass: HomeAssistant) -> None:
+    """Test an imported entry without its database fails setup."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_DATABASE: "feed.sqlite"})
+
+    await setup_integration(hass, entry)
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert gtfs_files(hass) == []
+
+
+async def test_remove_imported_entry_keeps_database(
+    hass: HomeAssistant, feed_file: Path
+) -> None:
+    """Test removing an imported entry keeps the database the YAML sensor reads."""
+    await hass.async_add_executor_job(
+        import_feed, feed_file, feed_file.with_suffix(".sqlite"), threading.Event()
+    )
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_DATABASE: "feed.sqlite"})
+    await setup_integration(hass, entry)
+    assert entry.state is ConfigEntryState.LOADED
+
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]

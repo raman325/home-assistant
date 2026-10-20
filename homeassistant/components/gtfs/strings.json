@@ -60,6 +60,9 @@
     "cannot_connect": {
       "message": "Could not download the GTFS feed. Check the feed URL and your network connection."
     },
+    "database_missing": {
+      "message": "The imported GTFS database is missing. Restart Home Assistant with the GTFS sensor still in configuration.yaml to import it again, or add the feed by URL."
+    },
     "invalid_feed": {
       "message": "The downloaded file is not a valid GTFS feed: {error}"
     }

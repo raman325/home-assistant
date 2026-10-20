@@ -25,6 +25,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: GtfsConfigEntry) -> None
     """Set up a GTFS feed from a config entry."""
     db_path = feed_database_path(hass, entry.data[CONF_DATABASE])
     if not await hass.async_add_executor_job(db_path.exists):
+        if CONF_URL not in entry.data:
+            raise ConfigEntryError(
+                translation_domain=DOMAIN, translation_key="database_missing"
+            )
         try:
             await async_fetch_feed(
                 hass, entry.data[CONF_URL], db_path, threading.Event()
@@ -58,6 +62,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: GtfsConfigEntry) -> Non
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: GtfsConfigEntry) -> None:
-    """Delete the feed database."""
+    """Delete the feed database of a feed added by URL."""
+    # Imported databases belong to the YAML sensor reading the same file.
+    if CONF_URL not in entry.data:
+        return
     db_path = feed_database_path(hass, entry.data[CONF_DATABASE])
     await hass.async_add_executor_job(partial(db_path.unlink, missing_ok=True))
