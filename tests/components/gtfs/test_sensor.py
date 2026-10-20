@@ -12,9 +12,12 @@ from pytest_homeassistant.common import async_fire_time_changed
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.gtfs import sensor as gtfs_sensor
+from homeassistant.components.gtfs.const import DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
 from . import setup_yaml_sensor
@@ -348,3 +351,75 @@ async def test_sensors_sharing_a_new_feed(hass: HomeAssistant, feed_file: Path) 
     assert (state := hass.states.get(SECOND_ENTITY_ID)) is not None
     assert state.state == "2026-10-19T12:10:00+00:00"
     assert await hass.async_add_executor_job(_feed_count, feed_file) == 1
+
+
+@pytest.mark.freeze_time("2026-10-19 07:30:00-04:00")
+@pytest.mark.usefixtures("feed_file")
+async def test_yaml_import(
+    hass: HomeAssistant, issue_registry: ir.IssueRegistry
+) -> None:
+    """Test YAML sensors on one file become one entry while the sensors remain."""
+    assert await async_setup_component(
+        hass,
+        SENSOR_DOMAIN,
+        {
+            SENSOR_DOMAIN: [
+                {"platform": "gtfs", "data": "feed.zip", **DAY_ROUTE},
+                {
+                    "platform": "gtfs",
+                    "data": "feed.zip",
+                    "origin": "S2",
+                    "destination": "S3",
+                    "name": "Second",
+                },
+            ]
+        },
+    )
+    await hass.async_block_till_done()
+
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    assert entry.state is ConfigEntryState.LOADED
+    assert sorted(subentry.title for subentry in entry.subentries.values()) == [
+        "First Street to Third Street",
+        "Second",
+    ]
+    assert hass.states.get("calendar.first_street_to_third_street") is not None
+    assert hass.states.get("calendar.second") is not None
+    assert hass.states.get(DAY_ENTITY_ID) is not None
+    assert hass.states.get("sensor.second") is not None
+    issue = issue_registry.async_get_issue(DOMAIN, "deprecated_yaml")
+    assert issue is not None
+    assert issue.breaks_in_ha_version == "2027.3.0"
+    assert issue.translation_key == "deprecated_yaml"
+
+
+@pytest.mark.parametrize(
+    ("config", "issue_id"),
+    [
+        pytest.param(
+            {"data": "missing.zip", **DAY_ROUTE},
+            "deprecated_yaml_import_issue_file_not_found",
+            id="file_not_found",
+        ),
+        pytest.param(
+            {"origin": "S9", "destination": "S3"},
+            "deprecated_yaml_import_issue_invalid_stop",
+            id="invalid_stop",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("feed_file")
+async def test_yaml_import_failure(
+    hass: HomeAssistant,
+    issue_registry: ir.IssueRegistry,
+    config: dict[str, str],
+    issue_id: str,
+) -> None:
+    """Test a YAML sensor that cannot be imported raises its own repair issue."""
+    await setup_yaml_sensor(hass, **config)
+
+    assert hass.config_entries.async_entries(DOMAIN) == []
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.breaks_in_ha_version == "2027.3.0"
+    assert issue_registry.async_get_issue(DOMAIN, "deprecated_yaml") is None

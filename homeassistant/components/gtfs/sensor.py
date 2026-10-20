@@ -1,5 +1,6 @@
 """Support for GTFS (Google/General Transport Format Schema)."""
 
+import asyncio
 import datetime as dt
 import logging
 import os
@@ -15,18 +16,31 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
 )
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigFlowResult
 from homeassistant.const import CONF_NAME, CONF_OFFSET, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv, issue_registry as ir
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util.hass_dict import HassKey
 
-from .const import CONF_DATA, CONF_DESTINATION, CONF_ORIGIN, CONF_TOMORROW, DEFAULT_PATH
+from .const import (
+    CONF_DATA,
+    CONF_DESTINATION,
+    CONF_ORIGIN,
+    CONF_TOMORROW,
+    DEFAULT_PATH,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 _SCHEDULE_SETUP_LOCK = threading.Lock()
+_IMPORT_LOCK: HassKey[asyncio.Lock] = HassKey(f"{DOMAIN}_import_lock")
+_IMPORTED_REASONS = frozenset({"already_configured", "route_imported"})
+BREAKS_IN_HA_VERSION = "2027.3.0"
 
 ATTR_ARRIVAL = "arrival"
 ATTR_BICYCLE = "trip_bikes_allowed_state"
@@ -480,13 +494,56 @@ def get_next_departure(
     }
 
 
-def setup_platform(
+async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
-    add_entities: AddEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the GTFS sensor."""
+    """Import the YAML route into a config entry and set up the GTFS sensor."""
+    import_data = {
+        key: config[key]
+        for key in (CONF_DATA, CONF_ORIGIN, CONF_DESTINATION, CONF_NAME)
+        if key in config
+    }
+    # Each route must see the entry an earlier route on the same file created,
+    # and the legacy setup must not write a database another import is reading.
+    async with hass.data.setdefault(_IMPORT_LOCK, asyncio.Lock()):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_IMPORT}, data=import_data
+        )
+        sensor = await hass.async_add_executor_job(_create_sensor, hass, config)
+    _async_create_yaml_issue(hass, result)
+    if sensor is not None:
+        async_add_entities([sensor])
+
+
+@callback
+def _async_create_yaml_issue(hass: HomeAssistant, result: ConfigFlowResult) -> None:
+    """Raise the deprecation issue matching the import result."""
+    if (
+        result["type"] is FlowResultType.CREATE_ENTRY
+        or result["reason"] in _IMPORTED_REASONS
+    ):
+        issue_id = "deprecated_yaml"
+    else:
+        issue_id = f"deprecated_yaml_import_issue_{result['reason']}"
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        breaks_in_ha_version=BREAKS_IN_HA_VERSION,
+        is_fixable=False,
+        learn_more_url="https://www.home-assistant.io/integrations/gtfs/",
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=issue_id,
+    )
+
+
+def _create_sensor(
+    hass: HomeAssistant, config: ConfigType
+) -> GTFSDepartureSensor | None:
+    """Open the YAML sensor's feed, importing it if needed."""
     gtfs_dir = hass.config.path(DEFAULT_PATH)
     data = config[CONF_DATA]
     origin = config.get(CONF_ORIGIN)
@@ -499,7 +556,7 @@ def setup_platform(
 
     if not os.path.exists(os.path.join(gtfs_dir, data)):
         _LOGGER.error("The given GTFS data file/folder was not found")
-        return
+        return None
 
     (gtfs_root, _) = os.path.splitext(data)
 
@@ -512,8 +569,8 @@ def setup_platform(
         if not gtfs.feeds:
             pygtfs.append_feed(gtfs, os.path.join(gtfs_dir, data))
 
-    add_entities(
-        [GTFSDepartureSensor(gtfs, name, origin, destination, offset, include_tomorrow)]
+    return GTFSDepartureSensor(
+        gtfs, name, origin, destination, offset, include_tomorrow
     )
 
 

@@ -66,5 +66,31 @@
     "invalid_feed": {
       "message": "The downloaded file is not a valid GTFS feed: {error}"
     }
+  },
+  "issues": {
+    "deprecated_yaml": {
+      "description": "Your GTFS sensors in `configuration.yaml` have been imported as GTFS route calendars. Each departure is a calendar event, and a calendar trigger with an offset replaces the sensor's `offset` option.\n\nMove your automations and dashboards from the GTFS sensors to the calendars, then remove the `gtfs` sensors from your `configuration.yaml` file and restart Home Assistant to fix this issue. The sensors keep working until then.",
+      "title": "The GTFS YAML sensor is being removed"
+    },
+    "deprecated_yaml_import_issue_file_not_found": {
+      "description": "A GTFS sensor in `configuration.yaml` could not be imported because its `data` file or folder was not found in the `gtfs` folder of your configuration directory.\n\nThe GTFS YAML sensor is being removed. Fix the `data` option and restart Home Assistant, or add the feed by URL in the UI and remove the sensor from `configuration.yaml`.",
+      "title": "The GTFS YAML sensor could not be imported"
+    },
+    "deprecated_yaml_import_issue_invalid_feed": {
+      "description": "A GTFS sensor in `configuration.yaml` could not be imported because its `data` file is not a valid GTFS feed. Check the logs for details.\n\nThe GTFS YAML sensor is being removed. Fix the feed and restart Home Assistant, or add the feed by URL in the UI and remove the sensor from `configuration.yaml`.",
+      "title": "[%key:component::gtfs::issues::deprecated_yaml_import_issue_file_not_found::title%]"
+    },
+    "deprecated_yaml_import_issue_invalid_stop": {
+      "description": "A GTFS sensor in `configuration.yaml` could not be imported because its `origin` or `destination` stop ID was not found in the feed.\n\nThe GTFS YAML sensor is being removed. Fix the stop IDs and restart Home Assistant, or add the route in the UI and remove the sensor from `configuration.yaml`.",
+      "title": "[%key:component::gtfs::issues::deprecated_yaml_import_issue_file_not_found::title%]"
+    },
+    "deprecated_yaml_import_issue_same_stop": {
+      "description": "A GTFS sensor in `configuration.yaml` could not be imported because its `origin` and `destination` are the same stop.\n\nThe GTFS YAML sensor is being removed. Fix the stop IDs and restart Home Assistant, or add the route in the UI and remove the sensor from `configuration.yaml`.",
+      "title": "[%key:component::gtfs::issues::deprecated_yaml_import_issue_file_not_found::title%]"
+    },
+    "deprecated_yaml_import_issue_unknown": {
+      "description": "A GTFS sensor in `configuration.yaml` could not be imported because of an unexpected error. Check the logs for details.\n\nThe GTFS YAML sensor is being removed. Add the feed by URL in the UI and remove the sensor from `configuration.yaml`.",
+      "title": "[%key:component::gtfs::issues::deprecated_yaml_import_issue_file_not_found::title%]"
+    }
   }
 }
