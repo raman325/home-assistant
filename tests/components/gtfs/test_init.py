@@ -165,6 +165,7 @@ async def test_imported_entry_database_missing(hass: HomeAssistant) -> None:
     await setup_integration(hass, entry)
 
     assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert entry.error_reason_translation_key == "database_missing"
     assert gtfs_files(hass) == []
 
 
