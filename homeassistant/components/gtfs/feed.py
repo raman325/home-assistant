@@ -1,18 +1,19 @@
 """Download, validate, and import GTFS feeds."""
 
 import asyncio
+from collections.abc import Callable
 import csv
 from dataclasses import dataclass, field
 from functools import partial
 import io
 from pathlib import Path
 import threading
-from typing import BinaryIO
+from typing import IO, BinaryIO
 import zipfile
 
 from aiohttp import ClientError, ClientTimeout
 import pygtfs
-from pygtfs.gtfs_entities import Stop
+from pygtfs.gtfs_entities import Agency, Stop
 from sqlalchemy.exc import IntegrityError
 
 from homeassistant.config_entries import ConfigEntry
@@ -96,7 +97,7 @@ async def async_fetch_feed(
     try:
         await _async_download_feed(hass, url, zip_path)
         try:
-            agency_name = await hass.async_add_executor_job(
+            name = await hass.async_add_executor_job(
                 _validate_and_import, zip_path, db_path, cancelled
             )
         except asyncio.CancelledError:
@@ -104,40 +105,47 @@ async def async_fetch_feed(
             raise
     finally:
         await hass.async_add_executor_job(partial(zip_path.unlink, missing_ok=True))
-    return agency_name
+    return name
 
 
 def _validate_and_import(
     zip_path: Path, db_path: Path, cancelled: threading.Event
 ) -> str | None:
-    agency_name = validate_feed(zip_path)
+    name = validate_feed(zip_path)
     import_feed(zip_path, db_path, cancelled)
-    return agency_name
+    return name
 
 
-def validate_feed(zip_path: Path) -> str | None:
-    """Check zip_path is a GTFS zip and return its first agency name."""
-    if not zipfile.is_zipfile(zip_path):
+def validate_feed(path: Path) -> str | None:
+    """Check path is a GTFS zip or folder and return its first agency name."""
+    if path.is_dir():
+        return _validate_files(
+            {child.name for child in path.iterdir()},
+            lambda name: (path / name).open("rb"),
+        )
+    if not zipfile.is_zipfile(path):
         raise InvalidFeed("Not a zip file")
     try:
-        with zipfile.ZipFile(zip_path) as archive:
-            names = set(archive.namelist())
-            if missing := _REQUIRED_FILES - names:
-                raise InvalidFeed(f"Missing {', '.join(sorted(missing))}")
-            if not names & _CALENDAR_FILES:
-                raise InvalidFeed("Missing calendar.txt or calendar_dates.txt")
-            with archive.open("agency.txt") as agency_file:
-                row = next(
-                    csv.DictReader(io.TextIOWrapper(agency_file, encoding="utf-8-sig")),
-                    None,
-                )
-    except (
-        zipfile.BadZipFile,
-        NotImplementedError,
-        RuntimeError,
-        csv.Error,
-        UnicodeDecodeError,
-    ) as err:
+        with zipfile.ZipFile(path) as archive:
+            return _validate_files(set(archive.namelist()), archive.open)
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as err:
+        raise InvalidFeed(str(err)) from err
+
+
+def _validate_files(
+    names: set[str], open_file: Callable[[str], IO[bytes]]
+) -> str | None:
+    if missing := _REQUIRED_FILES - names:
+        raise InvalidFeed(f"Missing {', '.join(sorted(missing))}")
+    if not names & _CALENDAR_FILES:
+        raise InvalidFeed("Missing calendar.txt or calendar_dates.txt")
+    try:
+        with open_file("agency.txt") as agency_file:
+            row = next(
+                csv.DictReader(io.TextIOWrapper(agency_file, encoding="utf-8-sig")),
+                None,
+            )
+    except (csv.Error, UnicodeDecodeError) as err:
         raise InvalidFeed(str(err)) from err
     if row is None:
         # pygtfs crashes on a header-only agency.txt.
@@ -206,3 +214,26 @@ def list_stops(feed: GtfsFeed) -> dict[str, str]:
             .all()
         )
     return {stop_id: stop_name or stop_id for stop_id, stop_name in stops}
+
+
+def agency_name(feed: GtfsFeed) -> str | None:
+    """Return the name of the feed's first agency."""
+    with feed.lock:
+        return feed.schedule.session.query(Agency.agency_name).limit(1).scalar()
+
+
+def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, str]]:
+    """Import a local feed unless db_path exists; return its agency and stops.
+
+    Raises FileNotFoundError if neither db_path nor source exists.
+    """
+    if not db_path.exists():
+        if not source.exists():
+            raise FileNotFoundError(source)
+        validate_feed(source)
+        import_feed(source, db_path, threading.Event())
+    feed = open_feed(db_path)
+    try:
+        return agency_name(feed), list_stops(feed)
+    finally:
+        close_feed(feed)

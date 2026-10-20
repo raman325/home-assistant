@@ -3,6 +3,7 @@
 from collections.abc import Generator
 import json
 from pathlib import Path
+import shutil
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,7 +21,7 @@ from homeassistant.config_entries import ConfigSubentryDataWithId
 from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
 
-from . import FEED_URL, ROUTE_SUBENTRY_ID, TEST_DATABASE, build_feed_zip
+from . import FEED_URL, FIXTURE_DIR, ROUTE_SUBENTRY_ID, TEST_DATABASE, build_feed_zip
 
 
 @pytest.fixture
@@ -48,6 +49,12 @@ def feed_file(hass_config_dir: str, feed_zip: bytes) -> Path:
     path.parent.mkdir()
     path.write_bytes(feed_zip)
     return path
+
+
+@pytest.fixture
+def feed_folder(hass_config_dir: str) -> Path:
+    """Place the fixture feed as an unzipped folder named feed."""
+    return Path(shutil.copytree(FIXTURE_DIR, Path(hass_config_dir) / "gtfs" / "feed"))
 
 
 @pytest.fixture

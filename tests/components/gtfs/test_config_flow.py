@@ -24,9 +24,11 @@ from homeassistant.components.gtfs.const import (
     SUBENTRY_TYPE_ROUTE,
 )
 from homeassistant.components.gtfs.feed import (
+    InvalidFeed,
     async_fetch_feed,
     feed_database_path,
     import_feed,
+    load_local_feed,
 )
 from homeassistant.config_entries import SOURCE_USER, ConfigFlowResult
 from homeassistant.const import CONF_URL
@@ -401,6 +403,52 @@ def test_import_cancelled_after_swap(tmp_path: Path) -> None:
         import_feed(zip_path, db_path, cancelled)
 
     assert list(work_dir.iterdir()) == [zip_path]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("feed.zip", id="zip"),
+        pytest.param("feed", id="folder"),
+    ],
+)
+@pytest.mark.usefixtures("feed_file", "feed_folder")
+def test_load_local_feed(hass_config_dir: str, source: str) -> None:
+    """Test a local zip or folder is imported and its agency and stops returned."""
+    gtfs_dir = Path(hass_config_dir) / "gtfs"
+
+    agency, stops = load_local_feed(gtfs_dir / source, gtfs_dir / "out.sqlite")
+
+    assert agency == "Test Agency"
+    assert stops["S1"] == "First Street"
+    assert (gtfs_dir / "out.sqlite").exists()
+
+
+def test_load_local_feed_reuses_database(feed_file: Path) -> None:
+    """Test an existing database is read without its source."""
+    db_path = feed_file.with_suffix(".sqlite")
+    import_feed(feed_file, db_path, threading.Event())
+    feed_file.unlink()
+
+    agency, _ = load_local_feed(feed_file, db_path)
+
+    assert agency == "Test Agency"
+
+
+def test_load_local_feed_missing(tmp_path: Path) -> None:
+    """Test a missing source without a database raises FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_local_feed(tmp_path / "feed.zip", tmp_path / "feed.sqlite")
+    assert not (tmp_path / "feed.sqlite").exists()
+
+
+def test_load_local_feed_invalid_folder(feed_folder: Path) -> None:
+    """Test a folder missing a required file is rejected before importing."""
+    (feed_folder / "stops.txt").unlink()
+
+    with pytest.raises(InvalidFeed, match="Missing stops.txt"):
+        load_local_feed(feed_folder, feed_folder.with_suffix(".sqlite"))
+    assert not feed_folder.with_suffix(".sqlite").exists()
 
 
 @pytest.mark.usefixtures("mock_feed_download")
