@@ -451,6 +451,29 @@ def test_load_local_feed_invalid_folder(feed_folder: Path) -> None:
     assert not feed_folder.with_suffix(".sqlite").exists()
 
 
+def test_load_local_feed_directory_instead_of_file(feed_folder: Path) -> None:
+    """Test a directory in place of a required file is rejected before importing."""
+    (feed_folder / "agency.txt").unlink()
+    (feed_folder / "agency.txt").mkdir()
+
+    with pytest.raises(InvalidFeed, match="Missing agency.txt"):
+        load_local_feed(feed_folder, feed_folder.with_suffix(".sqlite"))
+    assert not feed_folder.with_suffix(".sqlite").exists()
+
+
+def test_load_local_feed_replaces_empty_database(feed_file: Path) -> None:
+    """Test a database without an imported feed is imported again."""
+    db_path = feed_file.with_suffix(".sqlite")
+    schedule = pygtfs.Schedule(str(db_path))
+    schedule.session.close()
+    schedule.engine.dispose()
+
+    agency, stops = load_local_feed(feed_file, db_path)
+
+    assert agency == "Test Agency"
+    assert "S1" in stops
+
+
 @pytest.mark.usefixtures("mock_feed_download")
 async def test_user_flow_removed_before_finish(hass: HomeAssistant) -> None:
     """Test removing the flow after the import but before finishing deletes it."""

@@ -46,7 +46,7 @@ def feed_zip() -> bytes:
 def feed_file(hass_config_dir: str, feed_zip: bytes) -> Path:
     """Place the fixture feed where the YAML platform reads it."""
     path = Path(hass_config_dir) / "gtfs" / "feed.zip"
-    path.parent.mkdir()
+    path.parent.mkdir(exist_ok=True)
     path.write_bytes(feed_zip)
     return path
 

@@ -38,7 +38,7 @@ class CannotConnect(Exception):
 
 
 class InvalidFeed(Exception):
-    """The download is not a usable GTFS feed."""
+    """The feed is not a usable GTFS feed."""
 
 
 @dataclass
@@ -109,20 +109,23 @@ async def async_fetch_feed(
 
 
 def _validate_and_import(
-    zip_path: Path, db_path: Path, cancelled: threading.Event
+    source: Path, db_path: Path, cancelled: threading.Event
 ) -> str | None:
-    name = validate_feed(zip_path)
-    import_feed(zip_path, db_path, cancelled)
+    name = validate_feed(source)
+    import_feed(source, db_path, cancelled)
     return name
 
 
 def validate_feed(path: Path) -> str | None:
     """Check path is a GTFS zip or folder and return its first agency name."""
     if path.is_dir():
-        return _validate_files(
-            {child.name for child in path.iterdir()},
-            lambda name: (path / name).open("rb"),
-        )
+        try:
+            return _validate_files(
+                {child.name for child in path.iterdir() if child.is_file()},
+                lambda name: (path / name).open("rb"),
+            )
+        except OSError as err:
+            raise InvalidFeed(str(err)) from err
     if not zipfile.is_zipfile(path):
         raise InvalidFeed("Not a zip file")
     try:
@@ -153,11 +156,11 @@ def _validate_files(
     return row.get("agency_name") or None
 
 
-def _append_feed(db_path: Path, zip_path: Path) -> None:
+def _append_feed(db_path: Path, source: Path) -> None:
     schedule: pygtfs.Schedule | None = None
     try:
         schedule = pygtfs.Schedule(str(db_path))
-        pygtfs.append_feed(schedule, str(zip_path))
+        pygtfs.append_feed(schedule, str(source))
     except (
         ValueError,
         KeyError,
@@ -173,15 +176,15 @@ def _append_feed(db_path: Path, zip_path: Path) -> None:
             schedule.engine.dispose()
 
 
-def import_feed(zip_path: Path, db_path: Path, cancelled: threading.Event) -> None:
-    """Import zip_path into db_path, replacing it only on success.
+def import_feed(source: Path, db_path: Path, cancelled: threading.Event) -> None:
+    """Import source into db_path, replacing it only on success.
 
     A cancelled import discards its result, even if cancelled after the swap.
     """
     tmp_path = db_path.with_name(f"{db_path.name}.tmp")
     tmp_path.unlink(missing_ok=True)
     try:
-        _append_feed(tmp_path, zip_path)
+        _append_feed(tmp_path, source)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
@@ -222,12 +225,22 @@ def agency_name(feed: GtfsFeed) -> str | None:
         return feed.schedule.session.query(Agency.agency_name).limit(1).scalar()
 
 
-def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, str]]:
-    """Import a local feed unless db_path exists; return its agency and stops.
-
-    Raises FileNotFoundError if neither db_path nor source exists.
-    """
+def _has_feed(db_path: Path) -> bool:
     if not db_path.exists():
+        return False
+    feed = open_feed(db_path)
+    try:
+        return bool(feed.schedule.feeds)
+    finally:
+        close_feed(feed)
+
+
+def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, str]]:
+    """Import a local feed unless db_path already holds one; return its agency and stops.
+
+    Raises FileNotFoundError if db_path holds no feed and source does not exist.
+    """
+    if not _has_feed(db_path):
         if not source.exists():
             raise FileNotFoundError(source)
         validate_feed(source)
