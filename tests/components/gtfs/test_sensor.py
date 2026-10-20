@@ -14,13 +14,13 @@ from syrupy.assertion import SnapshotAssertion
 from homeassistant.components.gtfs import sensor as gtfs_sensor
 from homeassistant.components.gtfs.const import DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
-from . import setup_yaml_sensor
+from . import build_feed_zip, setup_yaml_sensor
 
 DAY_ROUTE = {"origin": "S1", "destination": "S3"}
 NIGHT_ROUTE = {"origin": "N1", "destination": "N2"}
@@ -393,15 +393,44 @@ async def test_yaml_import(
     assert issue.translation_key == "deprecated_yaml"
 
 
+@pytest.mark.freeze_time("2026-10-19 07:30:00-04:00")
+@pytest.mark.usefixtures("feed_file")
+async def test_yaml_import_on_later_restart(
+    hass: HomeAssistant, issue_registry: ir.IssueRegistry
+) -> None:
+    """Test an already imported route keeps its entry and still raises the issue."""
+    await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_IMPORT},
+        data={"data": "feed.zip", **DAY_ROUTE},
+    )
+    await hass.async_block_till_done()
+
+    await setup_yaml_sensor(hass, **DAY_ROUTE)
+
+    [entry] = hass.config_entries.async_entries(DOMAIN)
+    assert len(entry.subentries) == 1
+    assert issue_registry.async_get_issue(DOMAIN, "deprecated_yaml") is not None
+    assert hass.states.get(DAY_ENTITY_ID) is not None
+
+
 @pytest.mark.parametrize(
-    ("config", "issue_id"),
+    ("feed_zip", "config", "issue_id"),
     [
         pytest.param(
+            build_feed_zip(),
             {"data": "missing.zip", **DAY_ROUTE},
             "deprecated_yaml_import_issue_file_not_found",
             id="file_not_found",
         ),
         pytest.param(
+            build_feed_zip(exclude=frozenset({"stops.txt"})),
+            DAY_ROUTE,
+            "deprecated_yaml_import_issue_invalid_feed",
+            id="invalid_feed",
+        ),
+        pytest.param(
+            build_feed_zip(),
             {"origin": "S9", "destination": "S3"},
             "deprecated_yaml_import_issue_invalid_stop",
             id="invalid_stop",

@@ -219,7 +219,7 @@ def list_stops(feed: GtfsFeed) -> dict[str, str]:
     return {stop_id: stop_name or stop_id for stop_id, stop_name in stops}
 
 
-def agency_name(feed: GtfsFeed) -> str | None:
+def _agency_name(feed: GtfsFeed) -> str | None:
     """Return the name of the feed's first agency."""
     with feed.lock:
         return feed.schedule.session.query(Agency.agency_name).limit(1).scalar()
@@ -247,6 +247,6 @@ def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, 
         import_feed(source, db_path, threading.Event())
     feed = open_feed(db_path)
     try:
-        return agency_name(feed), list_stops(feed)
+        return _agency_name(feed), list_stops(feed)
     finally:
         close_feed(feed)

@@ -192,7 +192,7 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Unexpected exception importing GTFS feed %s", data)
             return self.async_abort(reason="unknown")
         if entry is not None and entry.state is ConfigEntryState.SETUP_ERROR:
-            # The entry failed setup because its database was missing.
+            # A rebuilt database lets an entry that failed setup load.
             self.hass.config_entries.async_schedule_reload(entry.entry_id)
         if entry is not None and any(
             subentry.unique_id == route_id for subentry in entry.subentries.values()

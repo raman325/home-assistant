@@ -502,9 +502,10 @@ async def async_setup_platform(
 ) -> None:
     """Import the YAML route into a config entry and set up the GTFS sensor."""
     import_data = {
-        key: config[key]
-        for key in (CONF_DATA, CONF_ORIGIN, CONF_DESTINATION, CONF_NAME)
-        if key in config
+        CONF_DATA: config[CONF_DATA],
+        CONF_ORIGIN: config[CONF_ORIGIN],
+        CONF_DESTINATION: config[CONF_DESTINATION],
+        CONF_NAME: config.get(CONF_NAME),
     }
     # Each route must see the entry an earlier route on the same file created,
     # and the legacy setup must not write a database another import is reading.
@@ -512,8 +513,8 @@ async def async_setup_platform(
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_IMPORT}, data=import_data
         )
+        _async_create_yaml_issue(hass, result)
         sensor = await hass.async_add_executor_job(_create_sensor, hass, config)
-    _async_create_yaml_issue(hass, result)
     if sensor is not None:
         async_add_entities([sensor])
 

@@ -459,6 +459,16 @@ def test_load_local_feed_invalid_folder(feed_folder: Path) -> None:
     assert not feed_folder.with_suffix(".sqlite").exists()
 
 
+def test_load_local_feed_unreadable_folder(feed_folder: Path) -> None:
+    """Test a folder that cannot be listed is rejected before importing."""
+    with (
+        patch.object(Path, "iterdir", side_effect=PermissionError("denied")),
+        pytest.raises(InvalidFeed, match="denied"),
+    ):
+        load_local_feed(feed_folder, feed_folder.with_suffix(".sqlite"))
+    assert not feed_folder.with_suffix(".sqlite").exists()
+
+
 def test_load_local_feed_directory_instead_of_file(feed_folder: Path) -> None:
     """Test a directory in place of a required file is rejected before importing."""
     (feed_folder / "agency.txt").unlink()
