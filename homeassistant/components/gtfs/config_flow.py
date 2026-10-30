@@ -51,6 +51,7 @@ from .feed import (
     InvalidFeed,
     async_fetch_feed,
     feed_database_path,
+    imported_database_path,
     list_stops,
     load_local_feed,
 )
@@ -93,7 +94,8 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Download the feed again, optionally from a new URL."""
         if self._url is None:
-            self._url = self._get_reconfigure_entry().data[CONF_URL]
+            # Imported entries have no URL until they are reconfigured to one.
+            self._url = self._get_reconfigure_entry().data.get(CONF_URL)
         return await self._async_step_url("reconfigure", user_input)
 
     async def _async_step_url(
@@ -175,14 +177,20 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
         self._database_kept = True
         if self.source == SOURCE_RECONFIGURE:
             entry = self._get_reconfigure_entry()
-            old_path = feed_database_path(self.hass, entry.data[CONF_DATABASE])
+            # Imported databases belong to the YAML sensor reading the same file.
+            old_path = (
+                feed_database_path(self.hass, entry.data[CONF_DATABASE])
+                if CONF_URL in entry.data
+                else None
+            )
             result = self.async_update_reload_and_abort(
                 entry, data_updates={CONF_URL: self._url, CONF_DATABASE: self._database}
             )
-            # Until it reloads, the entry reads from its open handle on the old file.
-            await self.hass.async_add_executor_job(
-                partial(old_path.unlink, missing_ok=True)
-            )
+            if old_path is not None:
+                # Until it reloads, the entry reads from its open handle on the old file.
+                await self.hass.async_add_executor_job(
+                    partial(old_path.unlink, missing_ok=True)
+                )
             return result
         return self.async_create_entry(
             title=self._title or URL(self._url).host or self._url,
@@ -203,15 +211,18 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
             (
                 entry
                 for entry in self._async_current_entries(include_ignore=False)
-                if entry.data[CONF_DATABASE] == database
+                if entry.data.get(CONF_DATA) == data
             ),
             None,
         )
+        if entry is not None and CONF_URL in entry.data:
+            # The feed was reconfigured to a URL, so its routes live in the UI.
+            return self.async_abort(reason="already_configured")
         try:
             agency, stops = await self.hass.async_add_executor_job(
                 load_local_feed,
                 Path(self.hass.config.path(DEFAULT_PATH, data)),
-                feed_database_path(self.hass, database),
+                imported_database_path(self.hass, database),
             )
         except FileNotFoundError:
             return self.async_abort(reason="file_not_found")
@@ -245,7 +256,7 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="route_imported")
         return self.async_create_entry(
             title=agency or Path(data).name,
-            data={CONF_DATABASE: database},
+            data={CONF_DATA: data, CONF_DATABASE: database},
             subentries=[
                 {
                     "data": route_data,

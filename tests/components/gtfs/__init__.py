@@ -8,7 +8,12 @@ import zipfile
 
 from pytest_homeassistant.common import MockConfigEntry
 
-from homeassistant.components.gtfs.const import DOMAIN
+from homeassistant.components.gtfs.const import (
+    CONF_DATA,
+    CONF_DATABASE,
+    DEFAULT_PATH,
+    DOMAIN,
+)
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -19,6 +24,8 @@ FEED_URL = "https://example.com/gtfs.zip"
 TEST_DATABASE = "test_feed.sqlite"
 ROUTE_SUBENTRY_ID = "route_s1_s3"
 ROUTE_ENTITY_ID = "calendar.first_street_to_third_street"
+# A feed entry imported from a YAML sensor reading feed.zip.
+IMPORTED_ENTRY_DATA = {CONF_DATA: "feed.zip", CONF_DATABASE: "feed.sqlite"}
 
 
 def build_feed_zip(
@@ -40,6 +47,11 @@ def build_feed_zip(
 def gtfs_files(hass: HomeAssistant) -> list[str]:
     """Return the names of the files in the GTFS cache folder."""
     return sorted(path.name for path in Path(hass.config.cache_path(DOMAIN)).glob("*"))
+
+
+def yaml_files(hass: HomeAssistant) -> list[str]:
+    """Return the names of the files in the folder the YAML sensor reads."""
+    return sorted(path.name for path in Path(hass.config.path(DEFAULT_PATH)).glob("*"))
 
 
 async def setup_yaml_sensor(hass: HomeAssistant, **config: Any) -> None:

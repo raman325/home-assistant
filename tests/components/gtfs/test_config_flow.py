@@ -48,12 +48,14 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from . import (
     FEED_URL,
+    IMPORTED_ENTRY_DATA,
     ROUTE_ENTITY_ID,
     ROUTE_SUBENTRY_ID,
     TEST_DATABASE,
     build_feed_zip,
     gtfs_files,
     setup_integration,
+    yaml_files,
 )
 
 AGENCY_HEADER = "agency_id,agency_name,agency_url,agency_timezone\n"
@@ -925,7 +927,7 @@ async def test_import(
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Test Agency"
-    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
+    assert result["data"] == IMPORTED_ENTRY_DATA
     assert _routes(result["result"]) == [
         (
             route_title,
@@ -936,7 +938,8 @@ async def test_import(
     assert [
         subentry.subentry_type for subentry in result["result"].subentries.values()
     ] == [SUBENTRY_TYPE_ROUTE]
-    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]
+    assert yaml_files(hass) == ["feed.sqlite", "feed.zip"]
+    assert gtfs_files(hass) == []
 
 
 @pytest.mark.usefixtures("feed_folder", "mock_setup_entry")
@@ -945,8 +948,8 @@ async def test_import_folder(hass: HomeAssistant) -> None:
     result = await _import_route(hass, **{CONF_DATA: "feed"})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
-    assert gtfs_files(hass) == ["feed", "feed.sqlite"]
+    assert result["data"] == {CONF_DATA: "feed", CONF_DATABASE: "feed.sqlite"}
+    assert yaml_files(hass) == ["feed", "feed.sqlite"]
 
 
 @pytest.mark.parametrize(
@@ -1075,8 +1078,8 @@ async def test_import_reuses_existing_database(
     result = await _import_route(hass)
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {CONF_DATABASE: "feed.sqlite"}
-    assert gtfs_files(hass) == ["feed.sqlite"]
+    assert result["data"] == IMPORTED_ENTRY_DATA
+    assert yaml_files(hass) == ["feed.sqlite"]
 
 
 @pytest.mark.usefixtures("feed_file")
@@ -1085,7 +1088,7 @@ async def test_import_rebuilds_missing_database(hass: HomeAssistant) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Test Agency",
-        data={CONF_DATABASE: "feed.sqlite"},
+        data=IMPORTED_ENTRY_DATA,
         subentries_data=[
             ConfigSubentryDataWithId(
                 data={CONF_ORIGIN: "S1", CONF_DESTINATION: "S3"},
@@ -1107,4 +1110,52 @@ async def test_import_rebuilds_missing_database(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
     assert entry.state is ConfigEntryState.LOADED
-    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]
+    assert yaml_files(hass) == ["feed.sqlite", "feed.zip"]
+
+
+@pytest.mark.usefixtures("mock_feed_download")
+async def test_reconfigure_imported_entry(hass: HomeAssistant, feed_file: Path) -> None:
+    """Test reconfiguring an imported feed to a URL keeps the YAML sensor's database."""
+    await hass.async_add_executor_job(
+        import_feed, feed_file, feed_file.with_suffix(".sqlite"), threading.Event()
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Test Agency", data=IMPORTED_ENTRY_DATA
+    )
+    await setup_integration(hass, entry)
+
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert get_schema_suggested_value(result["data_schema"].schema, CONF_URL) is None
+    result = await _submit_reconfigure(hass, result["flow_id"], FEED_URL)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    database = entry.data[CONF_DATABASE]
+    assert entry.data == {
+        CONF_DATA: "feed.zip",
+        CONF_URL: FEED_URL,
+        CONF_DATABASE: database,
+    }
+    assert gtfs_files(hass) == [database]
+    assert yaml_files(hass) == ["feed.sqlite", "feed.zip"]
+    assert entry.state is ConfigEntryState.LOADED
+
+
+@pytest.mark.usefixtures("feed_file")
+async def test_import_feed_reconfigured_to_url(hass: HomeAssistant) -> None:
+    """Test a YAML sensor whose feed was reconfigured to a URL is not imported again."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_DATA: "feed.zip", CONF_URL: FEED_URL, CONF_DATABASE: TEST_DATABASE},
+    )
+    entry.add_to_hass(hass)
+
+    result = await _import_route(hass, **{CONF_ORIGIN: "S2"})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert hass.config_entries.async_entries(DOMAIN) == [entry]
+    assert entry.subentries == {}
+    assert yaml_files(hass) == ["feed.zip"]

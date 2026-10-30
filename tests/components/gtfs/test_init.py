@@ -29,12 +29,14 @@ from homeassistant.helpers import (
 
 from . import (
     FEED_URL,
+    IMPORTED_ENTRY_DATA,
     ROUTE_ENTITY_ID,
     ROUTE_SUBENTRY_ID,
     TEST_DATABASE,
     build_feed_zip,
     gtfs_files,
     setup_integration,
+    yaml_files,
 )
 
 
@@ -188,13 +190,13 @@ async def test_download_written_in_chunks(
 
 async def test_imported_entry_database_missing(hass: HomeAssistant) -> None:
     """Test an imported entry without its database fails setup."""
-    entry = MockConfigEntry(domain=DOMAIN, data={CONF_DATABASE: "feed.sqlite"})
+    entry = MockConfigEntry(domain=DOMAIN, data=IMPORTED_ENTRY_DATA)
 
     await setup_integration(hass, entry)
 
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert entry.error_reason_translation_key == "database_missing"
-    assert gtfs_files(hass) == []
+    assert yaml_files(hass) == []
 
 
 async def test_remove_imported_entry_keeps_database(
@@ -204,14 +206,14 @@ async def test_remove_imported_entry_keeps_database(
     await hass.async_add_executor_job(
         import_feed, feed_file, feed_file.with_suffix(".sqlite"), threading.Event()
     )
-    entry = MockConfigEntry(domain=DOMAIN, data={CONF_DATABASE: "feed.sqlite"})
+    entry = MockConfigEntry(domain=DOMAIN, data=IMPORTED_ENTRY_DATA)
     await setup_integration(hass, entry)
     assert entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert gtfs_files(hass) == ["feed.sqlite", "feed.zip"]
+    assert yaml_files(hass) == ["feed.sqlite", "feed.zip"]
 
 
 CALENDAR_HEADER = (

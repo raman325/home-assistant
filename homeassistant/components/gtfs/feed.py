@@ -19,10 +19,11 @@ from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_URL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN
+from .const import CONF_DATABASE, DEFAULT_PATH, DOMAIN
 from .timetable import SERVICE_ADDED
 
 # National feeds run to hundreds of megabytes, so only stalls are capped.
@@ -63,6 +64,18 @@ def feed_database_path(hass: HomeAssistant, database: str) -> Path:
     The cache folder is left out of backups; setup downloads a missing feed again.
     """
     return Path(hass.config.cache_path(DOMAIN, database))
+
+
+def imported_database_path(hass: HomeAssistant, database: str) -> Path:
+    """Return the path of an imported feed's database, shared with the YAML sensor."""
+    return Path(hass.config.path(DEFAULT_PATH, database))
+
+
+def entry_database_path(hass: HomeAssistant, entry: ConfigEntry) -> Path:
+    """Return the path of a config entry's feed database."""
+    if CONF_URL in entry.data:
+        return feed_database_path(hass, entry.data[CONF_DATABASE])
+    return imported_database_path(hass, entry.data[CONF_DATABASE])
 
 
 def _open_destination(destination: Path) -> BinaryIO:

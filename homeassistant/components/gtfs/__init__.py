@@ -18,6 +18,7 @@ from .feed import (
     InvalidFeed,
     async_fetch_feed,
     close_feed,
+    entry_database_path,
     feed_database_path,
     open_feed,
 )
@@ -27,7 +28,7 @@ PLATFORMS = [Platform.CALENDAR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: GtfsConfigEntry) -> None:
     """Set up a GTFS feed from a config entry."""
-    db_path = feed_database_path(hass, entry.data[CONF_DATABASE])
+    db_path = entry_database_path(hass, entry)
     if not await hass.async_add_executor_job(db_path.exists):
         if CONF_URL not in entry.data:
             raise ConfigEntryError(
