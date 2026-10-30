@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 import csv
 from dataclasses import dataclass, field
+import datetime as dt
 from functools import partial
 import io
 from pathlib import Path
@@ -11,16 +12,18 @@ import threading
 from typing import IO, BinaryIO
 import zipfile
 
-from aiohttp import ClientError, ClientTimeout
+from aiohttp import ClientError, ClientResponseError, ClientTimeout
 import pygtfs
-from pygtfs.gtfs_entities import Agency, Stop
+from pygtfs.gtfs_entities import Agency, Service, ServiceException, Stop
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DEFAULT_PATH
+from .const import DOMAIN
+from .timetable import SERVICE_ADDED
 
 # National feeds run to hundreds of megabytes, so only stalls are capped.
 DOWNLOAD_TIMEOUT = ClientTimeout(total=None, sock_connect=30, sock_read=60)
@@ -29,6 +32,8 @@ _REQUIRED_FILES = frozenset(
     {"agency.txt", "routes.txt", "stop_times.txt", "stops.txt", "trips.txt"}
 )
 _CALENDAR_FILES = frozenset({"calendar.txt", "calendar_dates.txt"})
+# A stop or platform; trips only stop at these.
+LOCATION_TYPE_STOP = 0
 
 type GtfsConfigEntry = ConfigEntry[GtfsFeed]
 
@@ -49,11 +54,15 @@ class GtfsFeed:
     # The schedule's SQLAlchemy session is not thread-safe and calendars read
     # from executor threads.
     lock: threading.Lock = field(default_factory=threading.Lock)
+    last_service_date: dt.date | None = None
 
 
 def feed_database_path(hass: HomeAssistant, database: str) -> Path:
-    """Return the path of a feed's SQLite database."""
-    return Path(hass.config.path(DEFAULT_PATH, database))
+    """Return the path of a config entry feed's SQLite database.
+
+    The cache folder is left out of backups; setup downloads a missing feed again.
+    """
+    return Path(hass.config.cache_path(DOMAIN, database))
 
 
 def _open_destination(destination: Path) -> BinaryIO:
@@ -78,8 +87,11 @@ async def _async_download_feed(
                     buffer.clear()
             if buffer:
                 await hass.async_add_executor_job(file.write, buffer)
+    # aiohttp error text includes the URL, which may hold credentials.
+    except ClientResponseError as err:
+        raise CannotConnect(f"HTTP status {err.status}") from err
     except (ClientError, TimeoutError) as err:
-        raise CannotConnect(str(err)) from err
+        raise CannotConnect(type(err).__name__) from err
     finally:
         await hass.async_add_executor_job(file.close)
 
@@ -198,7 +210,9 @@ def import_feed(source: Path, db_path: Path, cancelled: threading.Event) -> None
 
 def open_feed(db_path: Path) -> GtfsFeed:
     """Open an imported feed for calendars reading from executor threads."""
-    return GtfsFeed(pygtfs.Schedule(f"{db_path}?check_same_thread=False"))
+    feed = GtfsFeed(pygtfs.Schedule(f"{db_path}?check_same_thread=False"))
+    feed.last_service_date = _last_service_date(feed.schedule)
+    return feed
 
 
 def close_feed(feed: GtfsFeed) -> None:
@@ -209,10 +223,19 @@ def close_feed(feed: GtfsFeed) -> None:
 
 
 def list_stops(feed: GtfsFeed) -> dict[str, str]:
-    """Return stop names keyed by stop ID, ordered by name."""
+    """Return stop names keyed by stop ID, ordered by name.
+
+    Stations, entrances and other locations trips don't stop at are left out.
+    """
     with feed.lock:
         stops = (
             feed.schedule.session.query(Stop.stop_id, Stop.stop_name)
+            .filter(
+                or_(
+                    Stop.location_type.is_(None),
+                    Stop.location_type == LOCATION_TYPE_STOP,
+                )
+            )
             .order_by(Stop.stop_name, Stop.stop_id)
             .all()
         )
@@ -250,3 +273,15 @@ def load_local_feed(source: Path, db_path: Path) -> tuple[str | None, dict[str, 
         return _agency_name(feed), list_stops(feed)
     finally:
         close_feed(feed)
+
+
+def _last_service_date(schedule: pygtfs.Schedule) -> dt.date | None:
+    """Return the last date the feed's calendars run any service."""
+    session = schedule.session
+    last_regular = session.query(func.max(Service.end_date)).scalar()
+    last_added = (
+        session.query(func.max(ServiceException.date))
+        .filter(ServiceException.exception_type == SERVICE_ADDED)
+        .scalar()
+    )
+    return max(filter(None, (last_regular, last_added)), default=None)
