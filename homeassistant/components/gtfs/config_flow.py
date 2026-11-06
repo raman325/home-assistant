@@ -183,9 +183,15 @@ class GtfsConfigFlow(ConfigFlow, domain=DOMAIN):
                 if CONF_URL in entry.data
                 else None
             )
-            result = self.async_update_reload_and_abort(
-                entry, data_updates={CONF_URL: self._url, CONF_DATABASE: self._database}
-            )
+            data_updates = {CONF_URL: self._url, CONF_DATABASE: self._database}
+            # The update listener reloads a loaded entry; it only exists once
+            # setup succeeded.
+            if entry.state is ConfigEntryState.LOADED:
+                result = self.async_update_and_abort(entry, data_updates=data_updates)
+            else:
+                result = self.async_update_reload_and_abort(
+                    entry, data_updates=data_updates
+                )
             if old_path is not None:
                 # Until it reloads, the entry reads from its open handle on the old file.
                 await self.hass.async_add_executor_job(
